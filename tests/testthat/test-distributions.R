@@ -56,6 +56,104 @@ test_that("histplot builds for all multiple/stat options", {
   }
 })
 
+test_that("histplot(x, y) is a bivariate 2-D count heatmap", {
+  pen <- load_dataset("penguins")
+  p <- histplot(data = pen, x = "bill_length_mm", y = "bill_depth_mm")
+  expect_no_error(ggplot2::ggplot_build(p))
+  # A single rect layer whose fill varies with the cell count (not one flat
+  # colour as the old degenerate univariate fallback produced).
+  expect_length(p$layers, 1)
+  expect_s3_class(p$layers[[1]]$geom, "GeomRect")
+  d <- ggplot2::ggplot_build(p)$data[[1]]
+  drawn <- d$fill[!is.na(d$fill) & d$fill != "transparent"]
+  expect_gt(length(unique(drawn)), 1)
+
+  # 2-D counts conserve the number of complete observations.
+  ok <- !is.na(pen$bill_length_mm) & !is.na(pen$bill_depth_mm)
+  xe <- rb_hist_bins(pen$bill_length_mm[ok], "auto")
+  ye <- rb_hist_bins(pen$bill_depth_mm[ok], "auto")
+  cm <- reaborn:::.rb_bin_counts_2d(
+    pen$bill_length_mm[ok],
+    pen$bill_depth_mm[ok],
+    xe,
+    ye
+  )
+  expect_equal(sum(cm), sum(ok))
+})
+
+test_that("bivariate histplot honors cbar, cmap, stat, and thresh", {
+  pen <- load_dataset("penguins")
+  args <- list(data = pen, x = "bill_length_mm", y = "bill_depth_mm")
+
+  # cbar toggles a real (non-empty) colour guide.
+  real_guide <- function(p) {
+    g <- ggplot2::ggplotGrob(p)
+    idx <- which(grepl("guide-box", g$layout$name))
+    any(vapply(
+      idx,
+      function(i) !inherits(g$grobs[[i]], "zeroGrob"),
+      logical(1)
+    ))
+  }
+  expect_true(real_guide(do.call(histplot, c(args, list(cbar = TRUE)))))
+  expect_false(real_guide(do.call(histplot, c(args, list(cbar = FALSE)))))
+  # legend = FALSE suppresses the colour bar even when cbar = TRUE.
+  expect_false(real_guide(do.call(
+    histplot,
+    c(args, list(cbar = TRUE, legend = FALSE))
+  )))
+
+  # cmap changes the fill colours.
+  fills <- function(p) {
+    d <- ggplot2::ggplot_build(p)$data[[1]]
+    sort(unique(d$fill[!is.na(d$fill) & d$fill != "transparent"]))
+  }
+  expect_false(identical(
+    fills(do.call(histplot, args)),
+    fills(do.call(histplot, c(args, list(cmap = "rocket"))))
+  ))
+
+  # Every stat builds; default thresh = 0 leaves empty cells transparent while
+  # thresh = NULL keeps them all.
+  for (s in c("count", "density", "probability", "percent", "frequency")) {
+    expect_no_error(ggplot2::ggplot_build(do.call(
+      histplot,
+      c(args, list(stat = s))
+    )))
+  }
+  n_blank <- function(p) {
+    d <- ggplot2::ggplot_build(p)$data[[1]]
+    sum(is.na(d$fill) | d$fill == "transparent")
+  }
+  expect_gt(n_blank(do.call(histplot, args)), 0)
+  expect_equal(n_blank(do.call(histplot, c(args, list(thresh = NULL)))), 0)
+})
+
+test_that("bivariate hist/KDE warn that hue is ignored (but still build)", {
+  pen <- load_dataset("penguins")
+  a <- list(data = pen, x = "bill_length_mm", y = "bill_depth_mm")
+
+  # Bivariate + hue: warns, yet returns a usable plot.
+  expect_warning(
+    p <- do.call(histplot, c(a, list(hue = "species"))),
+    "hue.*ignored.*bivariate"
+  )
+  expect_no_error(ggplot2::ggplot_build(p))
+  expect_warning(
+    do.call(kdeplot, c(a, list(hue = "species"))),
+    "hue.*ignored.*bivariate"
+  )
+
+  # No hue, and univariate + hue, are silent.
+  expect_no_warning(do.call(histplot, a))
+  expect_no_warning(do.call(kdeplot, a))
+  expect_no_warning(histplot(
+    data = pen,
+    x = "flipper_length_mm",
+    hue = "species"
+  ))
+})
+
 test_that("kdeplot density integrates to ~1 and builds", {
   pen <- load_dataset("penguins")
   est <- rb_gaussian_kde(pen$flipper_length_mm[!is.na(pen$flipper_length_mm)])
@@ -72,6 +170,82 @@ test_that("kdeplot density integrates to ~1 and builds", {
     x = "bill_length_mm",
     y = "bill_depth_mm"
   )))
+})
+
+test_that("bivariate kdeplot(fill=TRUE) honors cmap", {
+  pen <- load_dataset("penguins")
+  fills <- function(...) {
+    b <- ggplot2::ggplot_build(kdeplot(
+      data = pen,
+      x = "bill_length_mm",
+      y = "bill_depth_mm",
+      fill = TRUE,
+      ...
+    ))
+    unique(b$data[[1]]$fill)
+  }
+
+  default <- fills()
+  viridis <- fills(cmap = "viridis")
+  rocket <- fills(cmap = "rocket")
+  listcm <- fills(cmap = c("#ffffff", "#ff0000"))
+
+  # cmap must actually change the fill (the bug: it was silently ignored).
+  expect_false(identical(default, viridis))
+  expect_false(identical(viridis, rocket))
+  expect_false(identical(default, listcm))
+
+  # Every band gets a real color -- a named cmap vector used to collapse all
+  # fills to na.value ("grey50") via scale_fill_manual name-matching.
+  for (f in list(viridis, rocket, listcm)) {
+    expect_false(anyNA(f))
+    expect_false(any(f == "grey50"))
+  }
+
+  # The colormap resolves to genuine viridis colors, not the light-palette
+  # default.
+  expect_true(all(grepl("^#[0-9a-fA-F]{6}$", viridis)))
+})
+
+test_that("rb_iso_proportion_levels matches seaborn's mass mapping", {
+  # A smooth density grid (separable Gaussian).
+  g <- stats::dnorm(seq(-3, 3, length.out = 60))
+  z <- outer(g, g)
+  lev <- reaborn:::rb_iso_proportion_levels(z, 10, thresh = 0.05)
+
+  # seaborn's iso-proportion `p` names the contour below which `p` of the mass
+  # lies, so levels ascend in density from the outermost contour to the peak.
+  expect_false(is.unsorted(lev))
+  # p = 1 encloses 0% of the mass -> the grid's peak density.
+  expect_equal(max(lev), max(z))
+  # The outermost contour (p = thresh = 0.05) encloses ~95% of the mass -- NOT
+  # ~100%, which is the inverted-mapping bug that floods the whole grid.
+  expect_equal(sum(z[z >= min(lev)]) / sum(z), 0.95, tolerance = 0.02)
+})
+
+test_that("bivariate kdeplot(fill=TRUE) draws a bounded gradient, not a blob", {
+  set.seed(1)
+  n <- 300
+  df <- data.frame(
+    x = c(stats::rnorm(n, 0, 1), stats::rnorm(n, 4, 1)),
+    y = c(stats::rnorm(n, 0, 1), stats::rnorm(n, 3, 1.2))
+  )
+  d <- ggplot2::ggplot_build(kdeplot(
+    data = df,
+    x = "x",
+    y = "y",
+    fill = TRUE
+  ))$data[[1]]
+
+  lvls <- levels(d$level)
+  area <- function(s) diff(range(s$x)) * diff(range(s$y))
+  peak <- d[as.character(d$level) == utils::tail(lvls, 1), ] # densest, drawn last
+  outer <- d[as.character(d$level) == lvls[1], ] # sparsest, drawn first
+
+  # The peak band sits at the mode and must not flood the panel. The inverted
+  # levels bug produced a catch-all (~0, Inf] band painted over the whole grid.
+  expect_lt(area(peak), 0.25 * area(outer))
+  expect_false(any(grepl("e-1[0-9], Inf", as.character(d$level))))
 })
 
 test_that("ecdfplot is monotonic from 0 to 1", {
@@ -102,6 +276,50 @@ test_that("rugplot and displot build", {
     kind = "kde",
     col = "island"
   )))
+})
+
+test_that("faceting on a variable with NA drops the NA level (matches seaborn)", {
+  pen <- load_dataset("penguins")
+  # penguins$sex has 11 NA values; seaborn's FacetGrid drops NA facet levels
+  # rather than painting an empty "sex = NA" panel. Regression: the NA level used
+  # to reach a per-facet KDE over an empty subset and error in rb_gaussian_kde.
+  expect_no_error(ggplot2::ggplot_build(displot(
+    data = pen,
+    x = "flipper_length_mm",
+    hue = "species",
+    col = "sex",
+    kind = "kde"
+  )))
+
+  # Every kind must survive an NA facet variable, and produce no NA panel.
+  for (k in c("hist", "kde", "ecdf")) {
+    p <- displot(data = pen, x = "flipper_length_mm", col = "sex", kind = k)
+    lay <- ggplot2::ggplot_build(p)$layout$layout
+    expect_false(any(is.na(lay$sex)), info = k)
+    expect_identical(sort(as.character(unique(lay$sex))), c("Female", "Male"))
+  }
+
+  # Sibling figure-level dispatchers share the same fix.
+  expect_no_error(ggplot2::ggplot_build(catplot(
+    data = pen,
+    x = "species",
+    y = "flipper_length_mm",
+    col = "sex",
+    kind = "box"
+  )))
+  expect_no_error(ggplot2::ggplot_build(relplot(
+    data = pen,
+    x = "bill_length_mm",
+    y = "flipper_length_mm",
+    col = "sex"
+  )))
+})
+
+test_that("rb_gaussian_kde bails out gracefully on empty/singleton input", {
+  # Backstop: never call seq() on non-finite bounds when fewer than 2 points.
+  expect_identical(rb_gaussian_kde(numeric(0))$y, numeric(0))
+  expect_identical(rb_gaussian_kde(c(NA_real_, NA_real_))$y, numeric(0))
+  expect_identical(rb_gaussian_kde(5)$y, numeric(0))
 })
 
 test_that("sns.* aliases exist for distribution functions", {

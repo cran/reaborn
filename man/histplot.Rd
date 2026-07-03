@@ -24,10 +24,14 @@ histplot(
   shrink = 1,
   kde = FALSE,
   kde_kws = NULL,
+  thresh = 0,
+  cbar = FALSE,
+  cbar_kws = NULL,
   palette = NULL,
   hue_order = NULL,
   hue_norm = NULL,
   color = NULL,
+  cmap = NULL,
   legend = TRUE,
   .facet_vars = NULL,
   ...
@@ -64,7 +68,16 @@ horizontal histogram).}
 
 \item{kde_kws}{Arguments for the KDE (e.g. \code{bw_adjust}).}
 
+\item{thresh}{Bivariate-only. Cells with a value at or below \code{thresh} are left
+transparent (default \code{0}, so empty cells are blank); \code{NULL} fills every cell.}
+
+\item{cbar, cbar_kws}{Bivariate-only. Draw a color bar for the counts;
+\code{cbar_kws} accepts \code{width} (the bar width in points).}
+
 \item{palette, hue_order, hue_norm, color}{Color controls.}
+
+\item{cmap}{Bivariate-only colormap (name, \code{reaborn_cmap}, or color vector);
+defaults to a light sequential ramp built from \code{color}.}
 
 \item{legend}{Show the legend.}
 
@@ -77,4 +90,18 @@ A \code{reaborn_plot}.
 }
 \description{
 Port of \code{seaborn.histplot}. Returns a \link{reaborn_plot}.
+}
+\details{
+When both \code{x} and \code{y} are supplied, \code{histplot()} draws a single 2-D count
+heatmap (like \code{seaborn.histplot(x, y)}). In that bivariate case \code{hue} is
+ignored, with a warning, and the hue-based color controls (\code{palette},
+\code{hue_order}, \code{hue_norm}) do not apply; the fill is driven by \code{cmap}, which
+defaults to a light sequential ramp built from \code{color}.
+}
+\examples{
+penguins <- load_dataset("penguins")
+histplot(data = penguins, x = "flipper_length_mm", hue = "species")
+
+# Stack the hue groups
+histplot(data = penguins, x = "flipper_length_mm", hue = "species", multiple = "stack")
 }

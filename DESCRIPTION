@@ -1,6 +1,6 @@
 Package: reaborn
 Title: Statistical Data Visualization, the 'seaborn' Way
-Version: 1.0.0
+Version: 1.0.1
 Authors@R: 
     person(given = "Shawn", family = "Schwartz", role = c("aut", "cre"),
            email = "shawn.t.schwartz@gmail.com",
@@ -23,9 +23,9 @@ VignetteBuilder: knitr
 URL: https://reaborn.org, https://github.com/shawntz/reaborn
 BugReports: https://github.com/shawntz/reaborn/issues
 NeedsCompilation: no
-Packaged: 2026-06-25 19:16:10 UTC; shawnschwartz
+Packaged: 2026-07-03 05:49:00 UTC; shawnschwartz
 Author: Shawn Schwartz [aut, cre] (ORCID:
     <https://orcid.org/0000-0001-6444-8451>)
 Maintainer: Shawn Schwartz <shawn.t.schwartz@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-06-30 20:40:02 UTC
+Date/Publication: 2026-07-03 08:50:02 UTC
